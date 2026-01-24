@@ -16,14 +16,28 @@
 update_info <- function(
     stock_name = "Yellowtail rockfish - Northern Pacific Coast",
     ss3files = "https://raw.githubusercontent.com/pfmc-assessments/yellowtail_2025/refs/heads/main/Model_Runs/5.09_no_extra_SE/",
+    model = NULL,
     spawn_output_units = "Number x 1,000,000,000,000",
     assessment_year = 2025
 ) {
-    model <- r4ss::SS_output(
-        ss3files,
-        verbose = FALSE,
-        printstats = FALSE
-    )
+    if (!is.null(model)) {
+        cli::cli_alert_info("Using supplied model object.")
+    } else {
+        cli::cli_alert_info("Reading SS3 model output from {ss3files}")
+        model <- r4ss::SS_output(
+            ss3files,
+            verbose = FALSE,
+            printstats = FALSE
+        )
+    }
+
+    # get catch, abundance, Fmort, recruitment
+
+    # get catch
+    if ("kill_bio" %in% names(model$catch)) {
+        # replace header in catch table for older versions of SS3 (e.g. in 2017 POP assessment)
+        model$catch <- model$catch |> rename(dead_bio = kill_bio)
+    }
     model_catch <- model$catch |>
         group_by(Yr) |>
         summarize(value = sum(dead_bio)) |>
@@ -44,6 +58,7 @@ update_info <- function(
             year,
             value
         )
+    # get spawning output as abundance
     model_abundance <- model$timeseries |>
         select(Yr, SpawnBio) |>
         mutate(
@@ -64,6 +79,7 @@ update_info <- function(
             year,
             value
         )
+    # get Fmort as 1-SPR
     model_Fmort <- model$sprseries |>
         select(Yr, SPR) |>
         mutate(
@@ -84,6 +100,7 @@ update_info <- function(
             year,
             value
         )
+    # get recruitment
     model_recruitment <- model$timeseries |>
         select(Yr, Recruit_0) |>
         mutate(

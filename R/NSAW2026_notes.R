@@ -123,6 +123,23 @@ dat_long <- rbind(
     )
 )
 
+# load a bunch of files associated with POP 2017 assessment
+load(url(
+    "https://github.com/chantelwetzel-noaa/POP_2017/raw/refs/heads/master/r4ss/SS_output.RData"
+))
+# remove old POP data and add in new rows
+dat_long <- dat_long |> filter(!grepl("perch", tolower(stock)))
+dat_long <- rbind(
+    dat_long,
+    update_info(
+        stock_name = "Pacific ocean perch - Pacific Coast",
+        model = mod1,
+        spawn_output_units = "Number x 1,000,000",
+        assessment_year = 2025
+    )
+)
+
+
 # create a species group for each stock
 get_group <- function(stock) {
     case_when(
@@ -131,7 +148,6 @@ get_group <- function(stock) {
         grepl("Bocaccio", stock, ignore.case = TRUE) ~ "Rockfish",
         grepl("Chilipepper", stock, ignore.case = TRUE) ~ "Rockfish",
         grepl("Cowcod", stock, ignore.case = TRUE) ~ "Rockfish",
-        grepl("scorpionfish", stock, ignore.case = TRUE) ~ "Rockfish",
         grepl("thornyhead", stock, ignore.case = TRUE) ~ "Rockfish",
         grepl("Pacific ocean perch", stock, ignore.case = TRUE) ~ "Rockfish",
         # flatfish
@@ -148,6 +164,7 @@ get_group <- function(stock) {
         grepl("Lingcod", stock, ignore.case = TRUE) ~ "Roundfish",
         grepl("Pacific cod", stock, ignore.case = TRUE) ~ "Roundfish",
         grepl("Sablefish", stock, ignore.case = TRUE) ~ "Roundfish",
+        grepl("scorpionfish", stock, ignore.case = TRUE) ~ "Roundfish",
         # other (should be empty)
         TRUE ~ "Other"
     )
@@ -208,22 +225,222 @@ top_n_rockfish |> as_tibble()
 # 7 Shortspine thornyhead
 # 8 Longspine thornyhead
 
+# check if top_n_rockfish have multiple stocks per species (answer: no)
+dat_long |>
+    filter(species %in% c(top_n_rockfish)) |>
+    select(stock, species) |>
+    distinct() |>
+    arrange(species) |>
+    group_by(species) |>
+    summarize(n_stocks = n()) |>
+    filter(n_stocks > 1)
+
+
+# get GEMM data to fill in recent years for some/all stocks
+if (!exists("gemm")) {
+    # try loading from the data-raw folder first
+    if (file.exists("data-raw/GEMM_data/gemm_data.rdata")) {
+        load("data-raw/GEMM_data/gemm_data.rdata")
+    } else {
+        gemm <- nwfscSurvey::pull_gemm(dir = "data-raw/GEMM_data/")
+    }
+}
+gemm_summary <- gemm |>
+    group_by(year, species) |>
+    summarize(
+        total_dead = sum(
+            total_discard_with_mort_rates_applied_and_landings_mt
+        )
+    ) |>
+    arrange(species, year)
+
+gemm_summary |>
+    filter(year >= 2017) |>
+    group_by(species) |>
+    summarize(avg_dead_2017plus = mean(total_dead)) |>
+    arrange(desc(avg_dead_2017plus))
+
+# # A tibble: 837 x 2
+#    species             avg_dead_2017plus
+#    <chr>                           <dbl>
+#  1 Pacific Hake                  281221.
+#  2 Market Squid                   41894.
+#  3 Pink Shrimp                    24944.
+#  4 Dungeness Crab                 23887.
+#  5 Widow Rockfish                  9841.
+#  6 Northern Anchovy                6310.
+#  7 Albacore Tuna                   5936.
+#  8 Sablefish                       5670.
+#  9 Dover Sole                      5051.
+# 10 Yellowtail Rockfish             3362.
+# # i 827 more rows
+# # i Use `print(n = ...)` to see more rows
+
+# match gemm with dat_long stocks/species
+
+# count rockfish species in dat_long
+dat_long |>
+    filter(group == "Rockfish") |>
+    pull(species) |>
+    unique() |>
+    length()
+# [1] 27
+
+# count stocks in dat_long
+dat_long |>
+    filter(group == "Rockfish") |>
+    pull(stock) |>
+    unique() |>
+    length()
+# [1] 39
+
+# check thornyhead catches in gemm
+gemm |>
+    filter(grepl("Thornyhead", species)) |>
+    group_by(species) |>
+    summarize(
+        total_catch = sum(
+            total_discard_with_mort_rates_applied_and_landings_mt
+        )
+    )
+#   species                         total_catch
+#   <chr>                                 <dbl>
+# 1 Longspine Thornyhead                 19698.
+# 2 Shortspine Thornyhead                21564.
+# 3 Shortspine/Longspine Thornyhead       1446.
+
+# change species for the top 8 rockfish (and a few others) in gemm to match dat_long species names
+gemm_rock <- gemm |>
+    filter(grepl("Rockfish", species) | grepl("Thornyhead", species)) |>
+    mutate(
+        species = case_when(
+            grepl("Pacific Ocean Perch Rockfish", species) ~
+                "Pacific ocean perch",
+            grepl("Bocaccio Rockfish", species) ~ "Bocaccio",
+            grepl("Chilipepper Rockfish", species) ~ "Chilipepper",
+            grepl("Cowcod", species) ~ "Cowcod",
+            grepl("Shortspine Thornyhead", species) ~ "Shortspine thornyhead",
+            grepl("Longspine Thornyhead", species) ~ "Longspine thornyhead", # this probably groups the thornyhead mixes too
+            grepl(
+                "Rougheye",
+                species
+            ) ~ "Pacific Coast Blackspotted and Rougheye Rockfish Complex",
+            TRUE ~ gsub("Rockfish", "rockfish", species)
+        )
+    )
+
+all(top_n_rockfish %in% gemm_rock$species)
+# [1] TRUE
+
+dat_long_rockfish_species <- dat_long |>
+    filter(group == "Rockfish") |>
+    pull(species) |>
+    unique()
+gemm_rock_species <- gemm_rock$species |>
+    unique()
+length(dat_long_rockfish_species)
+# [1] 27
+length(gemm_rock_species)
+# [1] 69
+
+dat_long_rockfish_species[
+    which(
+        !dat_long_rockfish_species %in% gemm_rock_species
+    )
+]
+# [1] "California Blue and Deacon Rockfish Complex"                    "Northern California Gopher / Black-and-Yellow Rockfish Complex"
+# [3] "Oregon Blue and Deacon Rockfish Complex"                        "Vermilion rockfish and Sunset rockfish Complex"
+gemm_rock_species[
+    which(
+        !gemm_rock_species %in% dat_long_rockfish_species
+    )
+]
+#  [1] "Shortbelly rockfish"                    "Greenstriped rockfish"                  "Redstripe rockfish"                     "rockfish Unid"
+#  [5] "Rosethorn rockfish"                     "Silvergray rockfish"                    "Stripetail rockfish"                    "Redbanded rockfish"
+#  [9] "Shortraker rockfish"                    "Splitnose rockfish"                     "Yellowmouth rockfish"                   "Dusky rockfish"
+# [13] "Speckled rockfish"                      "Bank rockfish"                          "Shelf rockfish Unid"                    "Slope rockfish Unid"
+# [17] "Blue/Deacon rockfish"                   "Nearshore rockfish Unid"                "Quillback rockfish (California)"        "Quillback rockfish (Washington/Oregon)"
+# [21] "Black and Yellow rockfish"              "Gopher rockfish"                        "Grass rockfish"                         "Kelp rockfish"
+# [25] "Olive rockfish"                         "Pygmy rockfish"                         "Bronzespotted rockfish"                 "Flag rockfish"
+# [29] "Greenblotched rockfish"                 "Honeycomb rockfish"                     "Mexican rockfish"                       "Starry rockfish"
+# [33] "Halfbanded rockfish"                    "Pink rockfish"                          "Pinkrose rockfish"                      "Rosy rockfish"
+# [37] "Tiger rockfish"                         "Harlequin rockfish"                     "Chameleon rockfish"                     "Treefish rockfish"
+# [41] "Calico rockfish"                        "Swordspine rockfish"                    "Freckled rockfish"                      "Spotted rockfish Unid"
+# [45] "Puget Sound rockfish"                   "Whitespeckled rockfish"
+
+# calculate fraction of total catch in gemm_rock for species that are or aren't in dat_long
+z <- gemm_rock |>
+    filter(year >= 2011) |>
+    mutate(
+        in_dat_long = ifelse(
+            species %in% dat_long_rockfish_species,
+            TRUE,
+            FALSE
+        )
+    ) |>
+    group_by(year, in_dat_long) |>
+    summarize(
+        total_dead = sum(
+            total_discard_with_mort_rates_applied_and_landings_mt
+        )
+    )
+(sum(z$total_dead[z$in_dat_long]) / sum(z$total_dead)) |> round(2)
+# [1] 0.92
+
+range(gemm_rock$year)
+# [1] 2002 2024
+
+# update the values with parameter == Catch in dat_long for the years 2011 onward with values from gemm_rock
+# GEMM goes back to 2002, but estimates from assessments between 2002 and 2010 include discard estimates which may be more accurate
+new_rows <- gemm_rock |>
+    filter(species %in% dat_long_rockfish_species, year >= 2011) |>
+    group_by(year, species) |>
+    summarize(
+        total_dead = sum(total_discard_with_mort_rates_applied_and_landings_mt)
+    ) |>
+    mutate(
+        stock = "new rows from GEMM",
+        assessment_year = NA,
+        parameter = "Catch",
+        description = "GEMM estimated total catch including discards with mortality and landings",
+        unit = "Metric Tons",
+        value = total_dead,
+        group = "Rockfish"
+    ) |>
+    select(
+        stock,
+        assessment_year,
+        parameter,
+        description,
+        unit,
+        year,
+        value,
+        group,
+        species
+    )
+
+# add new rows to dat_long after removing old rockfish catch data from 2002 onward
+dat_with_gemm <- dat_long |>
+    filter(!(parameter == "Catch" & year >= 2011 & group == "Rockfish")) |>
+    rbind(new_rows)
+
+
 # add colors for of the top n rockfish species using the okabe-ito palette
 # but assigned to vaguely match fish colors in a few cases
-dat_long$color <- case_when(
-    dat_long$species == "Widow rockfish" ~ "#000000",
-    dat_long$species == "Yellowtail rockfish" ~ "#009E73",
-    dat_long$species == "Bocaccio" ~ "#56B4E9",
-    dat_long$species == "Pacific ocean perch" ~ "#D55E00",
-    dat_long$species == "Canary rockfish" ~ "#E69F00",
-    dat_long$species == "Chilipepper" ~ "#CC79A7",
-    dat_long$species == "Shortspine thornyhead" ~ "#F0E442",
-    dat_long$species == "Longspine thornyhead" ~ "#0072B2",
+dat_with_gemm$color <- case_when(
+    dat_with_gemm$species == "Widow rockfish" ~ "#000000",
+    dat_with_gemm$species == "Yellowtail rockfish" ~ "#009E73",
+    dat_with_gemm$species == "Bocaccio" ~ "#56B4E9",
+    dat_with_gemm$species == "Pacific ocean perch" ~ "#D55E00",
+    dat_with_gemm$species == "Canary rockfish" ~ "#E69F00",
+    dat_with_gemm$species == "Chilipepper" ~ "#CC79A7",
+    dat_with_gemm$species == "Shortspine thornyhead" ~ "#F0E442",
+    dat_with_gemm$species == "Longspine thornyhead" ~ "#0072B2",
     TRUE ~ "gray70"
 )
 
 # group all rockfish outside the top n into "Other rockfish"
-dat_long <- dat_long |>
+dat_with_gemm <- dat_with_gemm |>
     mutate(
         species_with_other = factor(
             ifelse(
@@ -238,8 +455,9 @@ dat_long <- dat_long |>
         )
     )
 
+
 # plot catch for all groundfish (except hake and grenadier which were removed earlier)
-dat_long |>
+dat_with_gemm |>
     filter(parameter == "Catch") |>
     filter(year <= 2022) |>
     ggplot(aes(x = year, y = value, fill = group)) +
@@ -252,33 +470,34 @@ dat_long |>
     theme_minimal()
 
 # just plot the rockfish with "Other rockfish" grouping
-dat_long |>
+dat_with_gemm |>
     filter(group == "Rockfish") |>
     filter(parameter == "Catch") |>
-    filter(year <= 2022) |>
+    #filter(year <= 2022) |>
     filter(!is.na(value) & year > 1920) |>
     ggplot(aes(x = year, y = value, fill = species_with_other)) +
     scale_fill_manual(
-        values = setNames(dat_long$color, dat_long$species_with_other)
+        values = setNames(dat_with_gemm$color, dat_with_gemm$species_with_other)
     ) +
+    scale_x_continuous(breaks = seq(1920, 2030, 10)) +
     geom_bar(stat = "identity") +
     labs(
-        #title = "Total Catch by Rockfish Species Over Time",
+        title = "Total U.S. West Coast Rockfish Catch",
+        subtitle = "27 species included represent 90% of total rockfish catch since 2002",
         x = "Year",
         y = "Catch (metric tons)"
     ) +
     theme_minimal() +
     theme(legend.position = "bottom") +
     labs(fill = "")
-ggsave("figures/NSAW2026_groundfish_catch_rockfish.png", width = 8, height = 6)
+ggsave("figures/NSAW2026_groundfish_catch_rockfish.png", width = 8, height = 5)
 
-#TODO: consider using GEMM to update recent catch for bocaccio, POP, and longspine
 
 # calculate Abundance plots relative to first non-NA value of abundance
-#dat_long <- dat_long_backup
-for (i in unique(dat_long$stock)) {
+# dat_with_gemm <- dat_with_gemm_backup
+for (i in unique(dat_with_gemm$stock)) {
     # get abundance data for this stock
-    dat_sub <- dat_long |>
+    dat_sub <- dat_with_gemm |>
         filter(stock == i) |>
         filter(parameter == "Abundance") |>
         arrange(year)
@@ -294,12 +513,12 @@ for (i in unique(dat_long$stock)) {
                 " (relative to first non-NA value)"
             )
         )
-    # rbind the modified rows back to dat_long
-    dat_long <- dat_long |>
+    # rbind the modified rows back to dat_with_gemm
+    dat_with_gemm <- dat_with_gemm |>
         rbind(dat_sub)
 }
 
-dat_long |>
+dat_with_gemm |>
     filter(group == "Rockfish") |>
     filter(parameter == "Abundance_ratio") |>
     filter(species_with_other != "Other rockfish") |>
@@ -307,15 +526,17 @@ dat_long |>
     ggplot(aes(
         x = year,
         y = value,
-        color = species_with_other #,
-        #group = species
+        color = species_with_other # ,
+        # group = species
     )) +
-    #scale_color_identity() +
-    scale_color_manual(values = setNames(dat_long$color, dat_long$species_with_other)) +
+    # scale_color_identity() +
+    scale_color_manual(
+        values = setNames(dat_with_gemm$color, dat_with_gemm$species_with_other)
+    ) +
     geom_line(linewidth = 1.3) +
     geom_hline(
         yintercept = c(0, 0.25, 0.4, 1.0),
-        #linetype = "dashed",
+        # linetype = "dashed",
         color = "gray50"
     ) +
     annotate(
@@ -331,16 +552,41 @@ dat_long |>
     labs(
         #title = "Relative Rockfish Abundance Over Time",
         x = "Year",
-        y = "Fraction of unfished spawning output"
+        y = "Fraction of unfished spawning output",
+        color = ""
     ) +
     theme_minimal() +
     scale_y_continuous(breaks = c(0, 0.25, 0.4, 1.0)) +
-    theme(panel.grid.major.x = element_line(color = "gray90"),
-          panel.grid.minor = element_blank(),
-          panel.grid.major.y = element_blank())
+    theme(
+        panel.grid.major.x = element_line(color = "gray90"),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank()
+    )
 
 ggsave(
     "figures/NSAW2026_groundfish_abundance_rockfish.png",
     width = 8,
-    height = 6
+    height = 5
 )
+
+
+# calculate total catch in gemm_rock from 2017 to 2024 vs 2011 to 2016 
+avgs <- gemm_rock |>
+    filter(year >= 2011) |>
+    mutate(
+        period = ifelse(year <= 2016, "2011-2015", "2020-2024")
+    ) |>
+    group_by(period) |>
+    summarize(
+        total_dead = sum(
+            total_discard_with_mort_rates_applied_and_landings_mt
+        )
+    )
+
+#   period    total_dead
+#   <chr>          <dbl>
+# 1 2011-2015     45324.
+# 2 2020-2024    159721.
+
+159721 / 45324
+# [1] 3.523983
