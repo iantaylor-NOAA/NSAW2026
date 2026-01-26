@@ -190,4 +190,4 @@ SSplotComparisons(
     
 )
 
-w19 <- r4ss::SS_read('models/2019 base model//Base_45')
+#w19 <- r4ss::SS_read('models/2019 base model//Base_45')
